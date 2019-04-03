@@ -346,6 +346,11 @@ func (mem *Mempool) CheckTx(tx types.Tx, cb func(*abci.Response)) (err error) {
 	return mem.CheckTxWithInfo(tx, cb, TxInfo{PeerID: UnknownPeerID})
 }
 
+// CheckTxFront does the same as CheckTx but pushed new transaction to the front of mempool
+func (mem *Mempool) CheckTxFront(tx types.Tx, cb func(*abci.Response)) (err error) {
+	return mem.CheckTxWithInfoFront(tx, cb, TxInfo{PeerID: UnknownPeerID})
+}
+
 // CheckTxWithInfo performs the same operation as CheckTx, but with extra meta data about the tx.
 // Currently this metadata is the peer who sent it,
 // used to prevent the tx from being gossiped back to them.
@@ -430,6 +435,91 @@ func (mem *Mempool) CheckTxWithInfo(tx types.Tx, cb func(*abci.Response), txInfo
 	return nil
 }
 
+// CheckTxWithInfoFront performs the same operation as CheckTx, but with extra meta data about the tx.
+// Case when new transaction should be pushed front to the mempool
+// Currently this metadata is the peer who sent it,
+// used to prevent the tx from being gossiped back to them.
+func (mem *Mempool) CheckTxWithInfoFront(tx types.Tx, cb func(*abci.Response), txInfo TxInfo) (err error) {
+	mem.proxyMtx.Lock()
+	// use defer to unlock mutex because application (*local client*) might panic
+	defer mem.proxyMtx.Unlock()
+
+	var (
+		memSize  = mem.Size()
+		txsBytes = mem.TxsBytes()
+	)
+	if memSize >= mem.config.Size ||
+		int64(len(tx))+txsBytes > mem.config.MaxTxsBytes {
+		return ErrMempoolIsFull{
+			memSize, mem.config.Size,
+			txsBytes, mem.config.MaxTxsBytes}
+	}
+
+	// The size of the corresponding amino-encoded TxMessage
+	// can't be larger than the maxMsgSize, otherwise we can't
+	// relay it to peers.
+	if len(tx) > maxTxSize {
+		return ErrTxTooLarge
+	}
+
+	if mem.preCheck != nil {
+		if err := mem.preCheck(tx); err != nil {
+			return ErrPreCheck{err}
+		}
+	}
+
+	// CACHE
+	if !mem.cache.Push(tx) {
+		// record the sender
+		e, ok := mem.txsMap[sha256.Sum256(tx)]
+		// The check is needed because tx may be in cache, but not in the mempool.
+		// E.g. after we've committed a block, txs are removed from the mempool,
+		// but not from the cache.
+		if ok {
+			memTx := e.Value.(*mempoolTx)
+			if _, loaded := memTx.senders.LoadOrStore(txInfo.PeerID, true); loaded {
+				// TODO: consider punishing peer for dups,
+				// its non-trivial since invalid txs can become valid,
+				// but they can spam the same tx with little cost to them atm.
+			}
+		}
+
+		return ErrTxInCache
+	}
+	// END CACHE
+
+	// WAL
+	if mem.wal != nil {
+		// TODO: Notify administrators when WAL fails
+		_, err := mem.wal.Write([]byte(tx))
+		if err != nil {
+			mem.logger.Error("Error writing to WAL", "err", err)
+		}
+		_, err = mem.wal.Write([]byte("\n"))
+		if err != nil {
+			mem.logger.Error("Error writing to WAL", "err", err)
+		}
+	}
+	// END WAL
+
+	// NOTE: proxyAppConn may error if tx buffer is full
+	if err = mem.proxyAppConn.Error(); err != nil {
+		return err
+	}
+	reqRes := mem.proxyAppConn.CheckTxAsync(tx)
+	if cb != nil {
+		composedCallback := func(res *abci.Response) {
+			mem.reqResCbFront(tx, txInfo.PeerID)(res)
+			cb(res)
+		}
+		reqRes.SetCallback(composedCallback)
+	} else {
+		reqRes.SetCallback(mem.reqResCbFront(tx, txInfo.PeerID))
+	}
+
+	return nil
+}
+
 // Global callback, which is called in the absence of the specific callback.
 //
 // In recheckTxs because no reqResCb (specific) callback is set, this callback
@@ -464,8 +554,33 @@ func (mem *Mempool) reqResCb(tx []byte, peerID uint16) func(res *abci.Response) 
 	}
 }
 
+// Specific callback, which allows us to incorporate local information, like
+// the peer that sent us this tx, so we can avoid sending it back to the same
+// peer.
+//
+// Used in CheckTxWithInfoFront to record PeerID who sent us the tx.
+func (mem *Mempool) reqResCbFront(tx []byte, peerID uint16) func(res *abci.Response) {
+	return func(res *abci.Response) {
+		if mem.recheckCursor != nil {
+			return
+		}
+
+		mem.resCbFirstTimeFront(tx, peerID, res)
+
+		// update metrics
+		mem.metrics.Size.Set(float64(mem.Size()))
+	}
+}
+
 func (mem *Mempool) addTx(memTx *mempoolTx) {
 	e := mem.txs.PushBack(memTx)
+	mem.txsMap[sha256.Sum256(memTx.tx)] = e
+	atomic.AddInt64(&mem.txsBytes, int64(len(memTx.tx)))
+	mem.metrics.TxSizeBytes.Observe(float64(len(memTx.tx)))
+}
+
+func (mem *Mempool) addTxFront(memTx *mempoolTx) {
+	e := mem.txs.PushFront(memTx)
 	mem.txsMap[sha256.Sum256(memTx.tx)] = e
 	atomic.AddInt64(&mem.txsBytes, int64(len(memTx.tx)))
 	mem.metrics.TxSizeBytes.Observe(float64(len(memTx.tx)))
@@ -501,6 +616,44 @@ func (mem *Mempool) resCbFirstTime(tx []byte, peerID uint16, res *abci.Response)
 			}
 			memTx.senders.Store(peerID, true)
 			mem.addTx(memTx)
+			mem.logger.Info("Added good transaction",
+				"tx", TxID(tx),
+				"res", r,
+				"height", memTx.height,
+				"total", mem.Size(),
+			)
+			mem.notifyTxsAvailable()
+		} else {
+			// ignore bad transaction
+			mem.logger.Info("Rejected bad transaction", "tx", TxID(tx), "res", r, "err", postCheckErr)
+			mem.metrics.FailedTxs.Add(1)
+			// remove from cache (it might be good later)
+			mem.cache.Remove(tx)
+		}
+	default:
+		// ignore other messages
+	}
+}
+
+// callback, which is called after the app checked the tx for the first time.
+//
+// The case where the app checks the tx for the second and subsequent times is
+// handled by the resCbRecheck callback.
+func (mem *Mempool) resCbFirstTimeFront(tx []byte, peerID uint16, res *abci.Response) {
+	switch r := res.Value.(type) {
+	case *abci.Response_CheckTx:
+		var postCheckErr error
+		if mem.postCheck != nil {
+			postCheckErr = mem.postCheck(tx, r.CheckTx)
+		}
+		if (r.CheckTx.Code == abci.CodeTypeOK) && postCheckErr == nil {
+			memTx := &mempoolTx{
+				height:    mem.height,
+				gasWanted: r.CheckTx.GasWanted,
+				tx:        tx,
+			}
+			memTx.senders.Store(peerID, true)
+			mem.addTxFront(memTx)
 			mem.logger.Info("Added good transaction",
 				"tx", TxID(tx),
 				"res", r,

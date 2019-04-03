@@ -126,6 +126,25 @@ func BroadcastTxSync(ctx *rpctypes.Context, tx types.Tx) (*ctypes.ResultBroadcas
 	}, nil
 }
 
+// BroadcastTxSyncFront does the same as BroadcastTxSync but insert new transaction at the beginning of mempool
+func BroadcastTxSyncFront(ctx *rpctypes.Context, tx types.Tx) (*ctypes.ResultBroadcastTx, error) {
+	resCh := make(chan *abci.Response, 1)
+	err := mempool.CheckTxFront(tx, func(res *abci.Response) {
+		resCh <- res
+	})
+	if err != nil {
+		return nil, err
+	}
+	res := <-resCh
+	r := res.GetCheckTx()
+	return &ctypes.ResultBroadcastTx{
+		Code: r.Code,
+		Data: r.Data,
+		Log:  r.Log,
+		Hash: tx.Hash(),
+	}, nil
+}
+
 // Returns with the responses from CheckTx and DeliverTx.
 //
 // IMPORTANT: use only for testing and development. In production, use
