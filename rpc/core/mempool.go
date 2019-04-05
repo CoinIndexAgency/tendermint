@@ -67,6 +67,15 @@ func BroadcastTxAsync(ctx *rpctypes.Context, tx types.Tx) (*ctypes.ResultBroadca
 	return &ctypes.ResultBroadcastTx{Hash: tx.Hash()}, nil
 }
 
+// BroadcastTxAsyncFront do the same as BroadcastTxAsync but adds new transaction at the beginning
+func BroadcastTxAsyncFront(ctx *rpctypes.Context, tx types.Tx) (*ctypes.ResultBroadcastTx, error) {
+	err := mempool.CheckTxFront(tx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &ctypes.ResultBroadcastTx{Hash: tx.Hash()}, nil
+}
+
 // Returns with the response from CheckTx. Does not wait for DeliverTx result.
 //
 // Please refer to
