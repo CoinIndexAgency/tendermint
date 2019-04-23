@@ -271,6 +271,10 @@ func (cli *socketClient) EndBlockAsync(req types.RequestEndBlock) *ReqRes {
 	return cli.queueRequest(types.ToRequestEndBlock(req))
 }
 
+func (cli *socketClient) FilterTxsAsync(req types.RequestFilterTxs) *ReqRes {
+	return cli.queueRequest(types.ToRequestFilterTxs(req))
+}
+
 //----------------------------------------
 
 func (cli *socketClient) FlushSync() error {
@@ -342,6 +346,12 @@ func (cli *socketClient) EndBlockSync(req types.RequestEndBlock) (*types.Respons
 	return reqres.Response.GetEndBlock(), cli.Error()
 }
 
+func (cli *socketClient) FilterTxsSync(req types.RequestFilterTxs) (*types.ResponseFilterTxs, error) {
+	reqres := cli.queueRequest(types.ToRequestFilterTxs(req))
+	cli.FlushSync()
+	return reqres.Response.GetFilterTxs(), cli.Error()
+}
+
 //----------------------------------------
 
 func (cli *socketClient) queueRequest(req *types.Request) *ReqRes {
@@ -406,6 +416,8 @@ func resMatchesReq(req *types.Request, res *types.Response) (ok bool) {
 		_, ok = res.Value.(*types.Response_BeginBlock)
 	case *types.Request_EndBlock:
 		_, ok = res.Value.(*types.Response_EndBlock)
+	case *types.Request_FilterTxs:
+		_, ok = res.Value.(*types.Response_FilterTxs)
 	}
 	return ok
 }

@@ -222,6 +222,15 @@ func (cli *grpcClient) EndBlockAsync(params types.RequestEndBlock) *ReqRes {
 	return cli.finishAsyncCall(req, &types.Response{Value: &types.Response_EndBlock{EndBlock: res}})
 }
 
+func (cli *grpcClient) FilterTxsAsync(params types.RequestFilterTxs) *ReqRes {
+	req := types.ToRequestFilterTxs(params)
+	res, err := cli.client.FilterTxs(context.Background(), req.GetFilterTxs(), grpc.FailFast(true))
+	if err != nil {
+		cli.StopForError(err)
+	}
+	return cli.finishAsyncCall(req, &types.Response{Value: &types.Response_FilterTxs{FilterTxs: res}})
+}
+
 func (cli *grpcClient) finishAsyncCall(req *types.Request, res *types.Response) *ReqRes {
 	reqres := NewReqRes(req)
 	reqres.Response = res // Set response
@@ -298,4 +307,9 @@ func (cli *grpcClient) BeginBlockSync(params types.RequestBeginBlock) (*types.Re
 func (cli *grpcClient) EndBlockSync(params types.RequestEndBlock) (*types.ResponseEndBlock, error) {
 	reqres := cli.EndBlockAsync(params)
 	return reqres.Response.GetEndBlock(), cli.Error()
+}
+
+func (cli *grpcClient) FilterTxsSync(params types.RequestFilterTxs) (*types.ResponseFilterTxs, error) {
+	reqres := cli.FilterTxsAsync(params)
+	return reqres.Response.GetFilterTxs(), cli.Error()
 }

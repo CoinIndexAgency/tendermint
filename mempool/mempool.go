@@ -625,6 +625,7 @@ func (mem *Mempool) ReapMaxBytesMaxGas(maxBytes, maxGas int64) types.Txs {
 	// size per tx, and set the initial capacity based off of that.
 	// txs := make([]types.Tx, 0, cmn.MinInt(mem.txs.Len(), max/mem.avgTxSize))
 	txs := make([]types.Tx, 0, mem.txs.Len())
+	bytesTxs := make([][]byte, 0, mem.txs.Len())
 	for e := mem.txs.Front(); e != nil; e = e.Next() {
 		memTx := e.Value.(*mempoolTx)
 		// Check total size requirement
@@ -643,8 +644,20 @@ func (mem *Mempool) ReapMaxBytesMaxGas(maxBytes, maxGas int64) types.Txs {
 		}
 		totalGas = newTotalGas
 		txs = append(txs, memTx.tx)
+		bytesTxs = append(bytesTxs, []byte(memTx.tx))
 	}
-	return txs
+
+	response, err := mem.proxyAppConn.FilterTxsSync(abci.RequestFilterTxs{Txs: bytesTxs})
+	if err != nil || len(response.Txs) == 0 {
+		return txs
+	}
+
+	resultTxs := make([]types.Tx, 0, len(response.Txs))
+	for _, d := range response.Txs {
+		t := types.Tx(d)
+		resultTxs = append(resultTxs, t)
+	}
+	return resultTxs
 }
 
 // ReapMaxTxs reaps up to max transactions from the mempool.

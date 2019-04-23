@@ -135,6 +135,12 @@ func ToRequestEndBlock(req RequestEndBlock) *Request {
 	}
 }
 
+func ToRequestFilterTxs(req RequestFilterTxs) *Request {
+	return &Request{
+		Value: &Request_FilterTxs{&req},
+	}
+}
+
 //----------------------------------------
 
 func ToResponseException(errStr string) *Response {
@@ -206,5 +212,11 @@ func ToResponseBeginBlock(res ResponseBeginBlock) *Response {
 func ToResponseEndBlock(res ResponseEndBlock) *Response {
 	return &Response{
 		Value: &Response_EndBlock{&res},
+	}
+}
+
+func ToResponseFilterTxs(res ResponseFilterTxs) *Response {
+	return &Response{
+		Value: &Response_FilterTxs{&res},
 	}
 }

@@ -158,6 +158,17 @@ func (app *localClient) EndBlockAsync(req types.RequestEndBlock) *ReqRes {
 	)
 }
 
+func (app *localClient) FilterTxsAsync(req types.RequestFilterTxs) *ReqRes {
+	app.mtx.Lock()
+	defer app.mtx.Unlock()
+
+	res := app.Application.FilterTxs(req)
+	return app.callback(
+		types.ToRequestFilterTxs(req),
+		types.ToResponseFilterTxs(res),
+	)
+}
+
 //-------------------------------------------------------
 
 func (app *localClient) FlushSync() error {
@@ -237,6 +248,14 @@ func (app *localClient) EndBlockSync(req types.RequestEndBlock) (*types.Response
 	defer app.mtx.Unlock()
 
 	res := app.Application.EndBlock(req)
+	return &res, nil
+}
+
+func (app *localClient) FilterTxsSync(req types.RequestFilterTxs) (*types.ResponseFilterTxs, error) {
+	app.mtx.Lock()
+	defer app.mtx.Unlock()
+
+	res := app.Application.FilterTxs(req)
 	return &res, nil
 }
 

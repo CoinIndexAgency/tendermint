@@ -23,6 +23,7 @@ type Application interface {
 	DeliverTx(tx []byte) ResponseDeliverTx           // Deliver a tx for full processing
 	EndBlock(RequestEndBlock) ResponseEndBlock       // Signals the end of a block, returns changes to the validator set
 	Commit() ResponseCommit                          // Commit the state and return the application Merkle root hash
+	FilterTxs(RequestFilterTxs) ResponseFilterTxs        // Filter transactions before include them into proposal
 }
 
 //-------------------------------------------------------
@@ -71,6 +72,10 @@ func (BaseApplication) BeginBlock(req RequestBeginBlock) ResponseBeginBlock {
 
 func (BaseApplication) EndBlock(req RequestEndBlock) ResponseEndBlock {
 	return ResponseEndBlock{}
+}
+
+func (BaseApplication) FilterTxs(req RequestFilterTxs) ResponseFilterTxs {
+	return ResponseFilterTxs{}
 }
 
 //-------------------------------------------------------
@@ -134,5 +139,10 @@ func (app *GRPCApplication) BeginBlock(ctx context.Context, req *RequestBeginBlo
 
 func (app *GRPCApplication) EndBlock(ctx context.Context, req *RequestEndBlock) (*ResponseEndBlock, error) {
 	res := app.app.EndBlock(*req)
+	return &res, nil
+}
+
+func (app *GRPCApplication) FilterTxs(ctx context.Context, req *RequestFilterTxs) (*ResponseFilterTxs, error) {
+	res := app.app.FilterTxs(*req)
 	return &res, nil
 }

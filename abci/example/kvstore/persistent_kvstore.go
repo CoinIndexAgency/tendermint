@@ -110,6 +110,11 @@ func (app *PersistentKVStoreApplication) EndBlock(req types.RequestEndBlock) typ
 	return types.ResponseEndBlock{ValidatorUpdates: app.ValUpdates}
 }
 
+// No filter transactions
+func (app *PersistentKVStoreApplication) FilterTxs(req types.RequestFilterTxs) types.ResponseFilterTxs {
+	return types.ResponseFilterTxs{}
+}
+
 //---------------------------------------------
 // update validators
 
